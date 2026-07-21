@@ -1,7 +1,6 @@
 """Output formatters — Rich tables with plain-text fallback."""
 
 from __future__ import annotations
-
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -67,6 +66,12 @@ def _first_mac(host: dict) -> str:
 def _svc_count(host: dict) -> int:
     """Return number of services associated with a host."""
     return len(host.get("services", []))
+
+
+def _short_id(val: str | None, width: int = 12) -> str:
+    if not val:
+        return "—"
+    return val[:width] + "…" if len(val) > width else val
 
 
 # ── public printers ──────────────────────────────────────────────────
@@ -196,9 +201,7 @@ def print_services(services: list[dict], as_json: bool = False) -> None:
                 str(s.get("id", "")),
                 s.get("name") or "—",
                 s.get("service_definition") or s.get("definition") or "—",
-                (s.get("host_id") or "—")[:12] + "…"
-                if s.get("host_id")
-                else "—",
+                _short_id(s.get("host_id")),
                 str(len(s.get("bindings", []))),
             )
         console.print(t)
@@ -232,3 +235,241 @@ def print_search_results(results: dict, as_json: bool = False) -> None:
         if hosts:
             print()
         print_services(svcs, as_json=False)
+
+
+# ── new printers ─────────────────────────────────────────────────────
+
+def print_networks(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print networks table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Networks ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Name", style="bold")
+        t.add_column("Description")
+        for n in items:
+            t.add_row(
+                str(n.get("id", "")),
+                n.get("name") or "—",
+                (n.get("description") or "—")[:60],
+            )
+        console.print(t)
+    else:
+        for n in items:
+            print(f"  {n.get('id')}  {n.get('name') or '—'}")
+
+
+def print_subnets(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print subnets table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Subnets ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Name", style="bold")
+        t.add_column("CIDR")
+        t.add_column("VLAN")
+        for s in items:
+            t.add_row(
+                str(s.get("id", "")),
+                s.get("name") or "—",
+                s.get("cidr") or s.get("subnet") or "—",
+                str(s.get("vlan_id") or s.get("vlan") or "—"),
+            )
+        console.print(t)
+    else:
+        for s in items:
+            print(f"  {s.get('id')}  {s.get('name') or '—'}  {s.get('cidr', '—')}")
+
+
+def print_ports(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print ports table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Ports ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Host", style="bold")
+        t.add_column("Number", justify="right")
+        t.add_column("Protocol")
+        t.add_column("Type")
+        for p in items:
+            t.add_row(
+                str(p.get("id", "")),
+                _short_id(p.get("host_id")),
+                str(p.get("number") or p.get("port") or "—"),
+                p.get("protocol") or "—",
+                p.get("type") or "—",
+            )
+        console.print(t)
+    else:
+        for p in items:
+            print(f"  {p.get('number') or p.get('port')}/{p.get('protocol')} ({p.get('type', '—')})")
+
+
+def print_ips(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print IP addresses table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"IP Addresses ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("IP", style="bold")
+        t.add_column("Host")
+        t.add_column("Subnet")
+        t.add_column("MAC")
+        for ip in items:
+            t.add_row(
+                str(ip.get("id", "")),
+                ip.get("ip") or ip.get("ip_address") or "—",
+                _short_id(ip.get("host_id")),
+                _short_id(ip.get("subnet_id")),
+                _mac_fmt(ip.get("mac") or ip.get("mac_address")),
+            )
+        console.print(t)
+    else:
+        for ip in items:
+            print(f"  {ip.get('ip') or ip.get('ip_address', '—')}  host={_short_id(ip.get('host_id'))}")
+
+
+def print_tags(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print tags table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Tags ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Name", style="bold")
+        t.add_column("Color")
+        for tag in items:
+            t.add_row(
+                str(tag.get("id", "")),
+                tag.get("name") or "—",
+                tag.get("color") or "—",
+            )
+        console.print(t)
+    else:
+        for tag in items:
+            print(f"  {tag.get('id')}  {tag.get('name') or '—'}")
+
+
+def print_vlans(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print VLANs table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"VLANs ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Name", style="bold")
+        t.add_column("VID", justify="right")
+        t.add_column("Network")
+        for v in items:
+            t.add_row(
+                str(v.get("id", "")),
+                v.get("name") or "—",
+                str(v.get("vid") or v.get("vlan_id") or "—"),
+                _short_id(v.get("network_id")),
+            )
+        console.print(t)
+    else:
+        for v in items:
+            print(f"  {v.get('id')}  {v.get('name') or '—'}  vid={v.get('vid', '—')}")
+
+
+def print_users(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print users table."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Users ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Username", style="bold")
+        t.add_column("Email")
+        t.add_column("Role")
+        for u in items:
+            t.add_row(
+                str(u.get("id", "")),
+                u.get("username") or u.get("name") or "—",
+                u.get("email") or "—",
+                u.get("role") or "—",
+            )
+        console.print(t)
+    else:
+        for u in items:
+            print(f"  {u.get('id')}  {u.get('username') or u.get('name', '—')}")
+
+
+def print_topology_list(data: list[dict] | dict, as_json: bool = False) -> None:
+    """Print topology list."""
+    items = data if isinstance(data, list) else data.get("data", [])
+    if as_json:
+        print_json(data)
+        return
+    if HAS_RICH:
+        t = Table(title=f"Topologies ({len(items)})")
+        t.add_column("ID", style="cyan", no_wrap=True, max_width=36)
+        t.add_column("Name", style="bold")
+        t.add_column("Network")
+        t.add_column("Views", justify="right")
+        for topo in items:
+            t.add_row(
+                str(topo.get("id", "")),
+                topo.get("name") or "—",
+                _short_id(topo.get("network_id")),
+                str(len(topo.get("views") or topo.get("available_views") or [])),
+            )
+        console.print(t)
+    else:
+        for topo in items:
+            print(f"  {topo.get('id')}  {topo.get('name') or '—'}")
+
+
+def print_topology_data(data: dict, as_json: bool = False) -> None:
+    """Print topology data summary."""
+    if as_json:
+        print_json(data)
+        return
+    payload = data.get("data", data) if isinstance(data, dict) else data
+    nodes_by_view = payload.get("nodes", {})
+    edges_by_view = payload.get("edges", {})
+    views = payload.get("available_views") or list(nodes_by_view.keys()) if isinstance(nodes_by_view, dict) else []
+    hosts = payload.get("hosts", [])
+    subnets = payload.get("subnets", [])
+
+    if HAS_RICH:
+        console.print("[bold cyan]Topology Data[/]")
+        console.print(f"  Hosts   : {len(hosts)}")
+        console.print(f"  Subnets : {len(subnets)}")
+        if views:
+            console.print(f"  Views   : {', '.join(str(v) for v in views)}")
+        if isinstance(nodes_by_view, dict):
+            for vname, vnode in nodes_by_view.items():
+                vedge = edges_by_view.get(vname, []) if isinstance(edges_by_view, dict) else []
+                containers = sum(1 for n in vnode if (n.get("node_type") or "").lower() == "container")
+                elements = sum(1 for n in vnode if (n.get("node_type") or "").lower() == "element")
+                console.print(f"  [{vname}] Nodes: {len(vnode)} ({containers} containers, {elements} elements), Edges: {len(vedge)}")
+        else:
+            console.print(f"  Nodes   : {len(nodes_by_view)}")
+            console.print(f"  Edges   : {len(edges_by_view)}")
+    else:
+        print(f"Hosts: {len(hosts)}, Subnets: {len(subnets)}, Views: {views}")
+
+
+def print_mermaid(text: str) -> None:
+    """Print Mermaid diagram text."""
+    print(text)
