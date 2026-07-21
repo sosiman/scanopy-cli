@@ -1,8 +1,12 @@
 """CLI entry point for Scanopy."""
 
 from __future__ import annotations
-import sys
 import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 import click
 from . import __version__
@@ -478,40 +482,162 @@ def _build_mermaid(topo_data: dict, view: str = "L3Logical") -> str:
 @cli.command("topology-export")
 @click.option("--network-id", "-i", required=True, help="Network ID.")
 @click.option("--view", "-v", default="", help="View name (e.g. L3Logical).")
-@click.option("--format", "-f", "fmt", type=click.Choice(["mermaid", "json"]), default="mermaid", help="Export format.")
-@click.option("--output", "-o", "outfile", default="", help="Output file path (default: stdout).")
+@click.option("--format", "-f", "fmt", type=click.Choice(["mermaid", "json", "png", "svg", "pdf", "html"]), default="mermaid", help="Export format.")
+@click.option("--output", "-o", "outfile", default="", help="Output file path (default: stdout for mermaid/json).")
+@click.option("--width", default=1920, help="Image width for png/svg (default: 1920).")
+@click.option("--height", default=1080, help="Image height for png/svg (default: 1080).")
+@click.option("--bg", default="white", help="Background color for png/svg/pdf (default: white).")
 @click.pass_context
-def topology_export_cmd(ctx: click.Context, network_id: str, view: str, fmt: str, outfile: str) -> None:
-    """Export topology as Mermaid .mmd or raw JSON."""
+def topology_export_cmd(ctx: click.Context, network_id: str, view: str, fmt: str, outfile: str, width: int, height: int, bg: str) -> None:
+    """Export topology as Mermaid, JSON, PNG, SVG, PDF, or HTML.
+
+    Visual formats (png/svg/pdf/html) require mermaid-cli: npm i -g @mermaid-js/mermaid-cli
+
+    \b
+    Examples:
+      sc topology-export -i NET_ID --format mermaid
+      sc topology-export -i NET_ID --format png -o network.png
+      sc topology-export -i NET_ID --format pdf -o network.pdf --bg white
+      sc topology-export -i NET_ID --format html -o network.html
+    """
     try:
         envelope = ctx.obj["client"].topology_data(network_id)
         payload = envelope.get("data", envelope) if isinstance(envelope, dict) else envelope
 
         if fmt == "json":
             output = json.dumps(envelope, indent=2, default=str)
-        else:
-            # Filter by view if specified
-            if view and isinstance(payload, dict):
-                available = payload.get("available_views") or payload.get("views") or []
-                # Note: view filtering is informational; we still export full data
-                if view not in [str(v) for v in available] and available:
-                    if console:
-                        console.print(f"[yellow]Warning: view '{view}' not in available views: {available}[/]")
-
-            output = _build_mermaid(envelope, view=view)
-
-        if outfile:
-            with open(outfile, "w") as f:
-                f.write(output)
-            if console:
-                console.print(f"[green]Exported to {outfile}[/]")
+            if outfile:
+                Path(outfile).write_text(output)
+                _print_success(f"Exported to {outfile}")
             else:
-                print(f"Exported to {outfile}")
-        else:
-            print(output)
+                print(output)
+            return
+
+        # Generate Mermaid content
+        if view and isinstance(payload, dict):
+            available = payload.get("available_views") or payload.get("views") or []
+            if view not in [str(v) for v in available] and available:
+                if console:
+                    console.print(f"[yellow]Warning: view '{view}' not in available views: {available}[/]")
+
+        mermaid_content = _build_mermaid(envelope, view=view)
+
+        if fmt == "mermaid":
+            if outfile:
+                Path(outfile).write_text(mermaid_content)
+                _print_success(f"Exported to {outfile}")
+            else:
+                print(mermaid_content)
+            return
+
+        # Visual formats — need mmdc
+        _render_visual(mermaid_content, fmt, outfile, width, height, bg)
 
     except ServiceError as exc:
         _handle_error(exc)
+
+
+def _print_success(msg: str) -> None:
+    if console:
+        console.print(f"[green]{msg}[/]")
+    else:
+        print(msg)
+
+
+def _mermaid_to_html(mermaid_content: str) -> str:
+    """Generate a standalone HTML page with embedded Mermaid.js diagram."""
+    import html as html_mod
+    escaped = html_mod.escape(mermaid_content)
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scanopy Network Topology</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         margin: 0; padding: 20px; background: #f5f5f5; }}
+  .container {{ max-width: 1400px; margin: 0 auto; background: white;
+                border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 30px; }}
+  h1 {{ color: #333; margin-bottom: 5px; }}
+  .meta {{ color: #888; font-size: 14px; margin-bottom: 20px; }}
+  .mermaid {{ display: flex; justify-content: center; }}
+  .export-info {{ margin-top: 20px; padding: 15px; background: #f0f7ff;
+                  border-radius: 6px; font-size: 13px; color: #555; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🌐 Scanopy Network Topology</h1>
+  <p class="meta">Generated by scanopy-cli • {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+  <div class="mermaid">
+{escaped}
+  </div>
+  <div class="export-info">
+    <strong>Tip:</strong> Use browser Print (Ctrl+P) to save as PDF, or right-click the diagram to save as PNG/SVG.
+  </div>
+</div>
+<script>mermaid.initialize({{ startOnLoad: true, theme: 'default', flowchart: {{ useMaxWidth: true }} }});</script>
+</body>
+</html>"""
+
+
+def _render_visual(mermaid_content: str, fmt: str, outfile: str, width: int, height: int, bg: str) -> None:
+    """Render Mermaid content to png/svg/pdf/html using mmdc."""
+    mmdc = shutil.which("mmdc")
+    if not mmdc:
+        msg = "mermaid-cli (mmdc) not found. Install with: npm i -g @mermaid-js/mermaid-cli"
+        if console:
+            console.print(f"[red]Error: {msg}[/]")
+        else:
+            print(f"Error: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    # Default output filename
+    if not outfile:
+        outfile = f"topology.{fmt}"
+
+    # Create temp .mmd file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".mmd", delete=False) as f:
+        f.write(mermaid_content)
+        mmd_path = f.name
+
+    # Puppeteer config for running as root (servers)
+    puppeteer_cfg = Path("/tmp/scanopy-puppeteer.json")
+    if not puppeteer_cfg.exists():
+        puppeteer_cfg.write_text('{"args": ["--no-sandbox", "--disable-setuid-sandbox"]}')
+
+    try:
+        # Build mmdc command
+        cmd = [mmdc, "-i", mmd_path, "-o", outfile, "-b", bg, "-p", str(puppeteer_cfg)]
+
+        if fmt in ("png", "svg", "pdf"):
+            cmd.extend(["-w", str(width), "-H", str(height)])
+
+        if fmt == "html":
+            # Generate standalone HTML with embedded Mermaid.js
+            html_content = _mermaid_to_html(mermaid_content)
+            Path(outfile).write_text(html_content)
+            size = Path(outfile).stat().st_size
+            _print_success(f"Exported to {outfile} ({size:,} bytes)")
+            return
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if console:
+                console.print(f"[red]mmdc error: {stderr}[/]")
+            else:
+                print(f"mmdc error: {stderr}", file=sys.stderr)
+            sys.exit(1)
+
+        size = Path(outfile).stat().st_size if Path(outfile).exists() else 0
+        _print_success(f"Exported to {outfile} ({size:,} bytes)")
+
+    finally:
+        Path(mmd_path).unlink(missing_ok=True)
 
 
 # ── entry point ──────────────────────────────────────────────────────
